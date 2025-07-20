@@ -1,0 +1,8 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* Prevent scrollbars if canvas is larger than window */
+}
+canvas {
+  display: block; /* Remove extra space below canvas */
+}
