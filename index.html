@@ -3,19 +3,27 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WFC Plotter Sketch</title>
+    <title>Image Browser</title>
     <!-- Link to your custom stylesheet -->
     <link rel="stylesheet" type="text/css" href="style.css">
     <!-- Load the p5.js library (MUST be loaded first) -->
     <script src="libraries/p5.min.js"></script>
-    <!-- Load the p5.svg.js library (MUST be loaded after p5.min.js, before sketch.js) -->
-    <script src="libraries/p5.svg.js"></script>
-    <!-- Add other p5.js libraries here if you use them, e.g.: -->
-    <!-- <script src="libraries/p5.sound.min.js"></script> -->
-    <!-- <script src="libraries/p5.dom.min.js"></script> -->
+    <!-- p5.svg.js library removed as requested -->
 </head>
 <body>
-    <!-- Your p5.js sketch code will be loaded here -->
+    <div class="container">
+        <h1>Image Browser</h1>
+
+        <!-- File input for browsing local images -->
+        <label for="image-upload">Choose an image from your computer:</label>
+        <input type="file" id="image-upload" accept="image/*">
+
+        <div id="p5-canvas-container">
+            <!-- p5.js canvas will be placed here and the image drawn onto it -->
+        </div>
+    </div>
+
+    <!-- Your p5.js sketch code -->
     <script src="sketch.js"></script>
 </body>
 </html>
