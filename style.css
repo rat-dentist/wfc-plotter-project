@@ -1,8 +1,18 @@
+/* Basic styling to remove default browser margins and padding */
 html, body {
   margin: 0;
   padding: 0;
   overflow: hidden; /* Prevent scrollbars if canvas is larger than window */
+  display: flex; /* Use flexbox to center the canvas */
+  justify-content: center; /* Center horizontally */
+  align-items: center; /* Center vertically */
+  min-height: 100vh; /* Ensure body takes full viewport height */
+  background-color: #222; /* Dark background for the page itself */
 }
+
+/* Style the canvas element */
 canvas {
-  display: block; /* Remove extra space below canvas */
+  display: block; /* Remove any extra space below the canvas */
+  border: 1px solid #444; /* Optional: Add a subtle border to the canvas */
+  box-shadow: 0 0 10px rgba(0,0,0,0.5); /* Optional: Add a shadow */
 }
