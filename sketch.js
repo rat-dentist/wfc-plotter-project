@@ -1,659 +1,723 @@
-// --- Global Variables ---
-let selectedImage;      // Will hold the currently selected p5.Image object (the source tile atlas)
-let imageUploadInput;   // Reference to the HTML file input element (browse)
-let currentP5Canvas;    // Reference to the p5.js canvas element
+// sketch.js – p5.js + Interactive Tile Painting + WFC
+// ---------------------------------------------------
+// Requires: extractor.js
+// Load in HTML with:
+// <script type="module" src="sketch.js"></script>
 
-let allTiles = [];      // Array to hold unique Tile objects extracted from the source atlas
-let tileSize = 16;      // The size of each square tile (e.g., 16x16 pixels) - IMPORTANT: Set this to the size of tiles in your atlas!
+import extractor from './extractor.js';
 
-// --- CHANGE: Adjust grid dimensions for a 600x600px map ---
-let gridCols = 38;      // Number of columns in the output map (38 * 16 = 608)
-let gridRows = 38;      // Number of rows in the output map (38 * 16 = 608)
-// --- END CHANGE ---
+console.log("sketch.js file is being parsed.");
 
-// Declare uniqueTilePixelHashes globally (still useful for ensuring unique tiles from atlas)
-let uniqueTilePixelHashes;
+let selectedImage;
+let imageUploadInput;
+let previewTilesButton;
+let runWFCButton;
+let goToPaintModeButton; // New button to switch to paint mode
+let generateAdjacencyFromPaintButton; // New button to learn adjacency from painted grid
+let clearPaintGridButton; // New button to clear painted grid
 
-// --- PRELOAD ---
-// This function runs before setup(), ensuring initial assets are loaded.
-function preload() {
-  // No preload needed for this specific image selector functionality,
-  // as images are loaded on demand via the file input.
+let tileSize = 16;
+let tiles = [], adjacency = [];
+let grid = [], cols = 32, rows = 32;
+let canvas;
+
+// UI elements for tile size control
+let tileSizeControlContainer;
+let tileSizeRadioAuto;
+let tileSizeRadio16;
+let tileSizeRadio32;
+let tileSizeRadio64;
+let customTileSizeInput;
+let currentTileSizeMode = 'auto';
+
+// UI elements for tile transformation control
+let transformationControlContainer;
+let allowRotationsCheckbox;
+let allowFlipXCheckbox;
+let allowFlipYCheckbox;
+let allowRotations = true;
+let allowFlipX = true;
+let allowFlipY = false;
+
+// --- NEW: Interactive Paint Tool Variables ---
+let appMode = 'INITIAL_UPLOAD'; // 'INITIAL_UPLOAD', 'PREVIEW_TILES', 'INTERACTIVE_PAINT', 'WFC_GENERATING', 'WFC_COMPLETE'
+let paintedGrid = []; // 2D array to store tile IDs for the interactive map
+let paintedGridCols = 20; // Size of the interactive paint grid
+let paintedGridRows = 20;
+let paintedGridTileSize = 32; // Size of tiles in the interactive paint grid
+let selectedTileId = -1; // ID of the tile currently selected from the palette
+
+// DOM elements for palette
+let paletteContainerDiv;
+let paletteTilesGridDiv;
+let selectedTilePreviewImg;
+let selectedTilePreviewId;
+
+// Global p5.js functions (preload, setup, draw) are called by p5.js itself
+// even when defined in a module. We explicitly attach them to window.
+window.preload = function() {
+  console.log("p5.js preload() function called.");
 }
 
-// --- SETUP ---
-// This function runs once when the sketch starts
-function setup() {
-  // Create the p5.js canvas. It will be resized later to fit the WFC output.
-  currentP5Canvas = createCanvas(200, 200); // Initial small canvas
-  currentP5Canvas.parent('p5-canvas-container'); // Attach canvas to a specific HTML div
-  background(100); // Darker grey initial background
-  textAlign(CENTER, CENTER); // Center text for messages
-  textSize(14);
-  fill(200);
-  text("Browse a tile atlas to generate a map", width / 2, height / 2); // Initial message
+window.setup = function() {
+  console.log("p5.js setup() function called.");
+  // Adjust canvas size to make space for the right-side palette
+  canvas = createCanvas(640, 600); // Adjusted width
+  // p5.js automatically appends the canvas to the <body> by default.
 
-  noLoop(); // No continuous drawing; we'll draw once after WFC completes, or when redraw() is called
+  noLoop(); // We will control redraws manually
+  
+  createUI(); // Create all UI elements
+  
+  // Get references to palette DOM elements
+  paletteContainerDiv = select('#palette-container');
+  paletteTilesGridDiv = select('#palette-tiles-grid');
+  selectedTilePreviewImg = select('#preview-img').elt;
+  selectedTilePreviewId = select('#preview-id');
 
-  // Get reference to HTML file input element
-  imageUploadInput = select('#image-upload');
-
-  // Set up event listener for file input selection
-  imageUploadInput.changed(handleImageUpload);
-
-  console.log("Setup complete. Ready to browse tile atlases and generate WFC maps.");
+  // Initial screen setup
+  drawInitialUploadScreen();
+  
+  console.log("setup() completed. Canvas and UI initialized.");
 }
 
-// --- DRAW ---
-// This function will now draw the WFC grid if it's ready, otherwise the initial message.
-// It will only run when redraw() is explicitly called.
-function draw() {
-  // --- FIX: More robust check for grid initialization.
-  // Only draw grid if it's initialized and contains data.
-  if (Array.isArray(grid) && grid.length > 0 && grid[0] && grid[0].length > 0) {
-    drawGrid();
-  } else {
-    // Initial state or no image loaded
-    background(100);
-    textAlign(CENTER, CENTER);
-    textSize(14);
-    fill(200);
-    text("Browse a tile atlas to generate a map", width / 2, height / 2);
+window.draw = function() {
+  // The main draw loop. It will call different drawing functions based on appMode.
+  switch (appMode) {
+    case 'INITIAL_UPLOAD':
+      // Handled by drawInitialUploadScreen() in setup
+      break;
+    case 'PREVIEW_TILES':
+      drawExtractedTiles();
+      break;
+    case 'INTERACTIVE_PAINT':
+      drawInteractivePaintScreen();
+      break;
+    case 'WFC_GENERATING':
+      drawWFCGeneratingScreen();
+      break;
+    case 'WFC_COMPLETE':
+      drawGrid(); // Draw the final WFC grid
+      break;
   }
 }
 
-// --- TILE CLASS ---
-// Represents a single unique tile type extracted from the source image
-class Tile {
-  constructor(img, id) {
-    this.img = img; // The p5.Image object for this tile
-    this.id = id;   // Unique ID (its index in the 'allTiles' array)
-    this.pixels = []; // Store raw pixel data for uniqueness comparison
-    this.edges = []; // Store pixel data for [North, East, South, West] edges
-    this.adjacencies = { // Store arrays of tile IDs that can legally go next to this tile
-      north: [],
-      east: [],
-      south: [],
-      west: []
+// --- UI Creation and Management ---
+function createUI() {
+  console.log("createUI() called.");
+  const inputElement = document.createElement('input');
+  inputElement.type = 'file';
+  inputElement.accept = 'image/*';
+  inputElement.onchange = handleImageUpload;
+
+  const container = createDiv('<h2>WFC Plotter Project</h2>');
+  container.id('ui-container');
+  container.style('position', 'absolute');
+  container.style('top', '10px');
+  container.style('left', '10px');
+  container.style('background-color', 'rgba(255,255,255,0.8)');
+  container.style('padding', '10px');
+  container.style('border-radius', '5px');
+  container.style('z-index', '100');
+  container.style('color', '#333');
+  container.style('font-family', 'sans-serif');
+  container.style('display', 'flex');
+  container.style('flex-direction', 'column');
+  container.style('gap', '10px');
+
+  container.elt.appendChild(inputElement);
+  imageUploadInput = inputElement;
+
+  // Tile Size Control
+  tileSizeControlContainer = createDiv('<h3>Tile Size:</h3>');
+  tileSizeControlContainer.parent(container);
+  tileSizeControlContainer.style('display', 'flex');
+  tileSizeControlContainer.style('flex-direction', 'column');
+  tileSizeControlContainer.style('gap', '5px');
+
+  tileSizeRadioAuto = createRadio('tileSize');
+  tileSizeRadioAuto.parent(tileSizeControlContainer);
+  tileSizeRadioAuto.option('Auto-detect', 'auto');
+  tileSizeRadioAuto.selected('auto');
+  tileSizeRadioAuto.changed(() => {
+    currentTileSizeMode = 'auto';
+    customTileSizeInput.hide();
+  });
+
+  tileSizeRadio16 = createRadio('tileSize');
+  tileSizeRadio16.parent(tileSizeControlContainer);
+  tileSizeRadio16.option('16px', '16');
+  tileSizeRadio16.changed(() => {
+    currentTileSizeMode = 'preset';
+    tileSize = 16;
+    customTileSizeInput.hide();
+  });
+
+  tileSizeRadio32 = createRadio('tileSize');
+  tileSizeRadio32.parent(tileSizeControlContainer);
+  tileSizeRadio32.option('32px', '32');
+  tileSizeRadio32.changed(() => {
+    currentTileSizeMode = 'preset';
+    tileSize = 32;
+    customTileSizeInput.hide();
+  });
+
+  tileSizeRadio64 = createRadio('tileSize');
+  tileSizeRadio64.parent(tileSizeControlContainer);
+  tileSizeRadio64.option('64px', '64');
+  tileSizeRadio64.changed(() => {
+    currentTileSizeMode = 'preset';
+    tileSize = 64;
+    customTileSizeInput.hide();
+  });
+
+  const customLabel = createP('Custom:');
+  customLabel.parent(tileSizeControlContainer);
+  customLabel.style('margin-bottom', '0');
+  customTileSizeInput = createInput('32', 'number');
+  customTileSizeInput.parent(tileSizeControlContainer);
+  customTileSizeInput.attribute('min', '1');
+  customTileSizeInput.attribute('placeholder', 'Enter custom size');
+  customTileSizeInput.changed(() => {
+    currentTileSizeMode = 'custom';
+    tileSize = parseInt(customTileSizeInput.value);
+  });
+  customTileSizeInput.hide();
+
+  const tileSizeRadioCustom = createRadio('tileSize');
+  tileSizeRadioCustom.parent(tileSizeControlContainer);
+  tileSizeRadioCustom.option('Custom', 'custom');
+  tileSizeRadioCustom.changed(() => {
+    currentTileSizeMode = 'custom';
+    customTileSizeInput.show();
+    tileSize = parseInt(customTileSizeInput.value) || 32;
+  });
+
+  // Tile Transformation Controls
+  transformationControlContainer = createDiv('<h3>Tile Transformations:</h3>');
+  transformationControlContainer.parent(container);
+  transformationControlContainer.style('display', 'flex');
+  transformationControlContainer.style('flex-direction', 'column');
+  transformationControlContainer.style('gap', '5px');
+
+  allowRotationsCheckbox = createCheckbox('Allow 90° Rotations', allowRotations);
+  allowRotationsCheckbox.parent(transformationControlContainer);
+  allowRotationsCheckbox.changed(() => {
+    allowRotations = allowRotationsCheckbox.checked();
+    console.log("Allow Rotations:", allowRotations);
+  });
+
+  allowFlipXCheckbox = createCheckbox('Allow Horizontal Flip', allowFlipX);
+  allowFlipXCheckbox.parent(transformationControlContainer);
+  allowFlipXCheckbox.changed(() => {
+    allowFlipX = allowFlipXCheckbox.checked();
+    console.log("Allow Horizontal Flip:", allowFlipX);
+  });
+
+  allowFlipYCheckbox = createCheckbox('Allow Vertical Flip', allowFlipY);
+  allowFlipYCheckbox.parent(transformationControlContainer);
+  allowFlipYCheckbox.changed(() => {
+    allowFlipY = allowFlipYCheckbox.checked();
+    console.log("Allow Vertical Flip:", allowFlipY);
+  });
+
+  // Action Buttons
+  previewTilesButton = createButton('Preview Extracted Tiles');
+  previewTilesButton.parent(container);
+  previewTilesButton.mousePressed(processImageAndThenDrawPreview); 
+  previewTilesButton.hide();
+
+  goToPaintModeButton = createButton('Go to Paint Mode');
+  goToPaintModeButton.parent(container);
+  goToPaintModeButton.mousePressed(goToPaintMode);
+  goToPaintModeButton.hide();
+
+  runWFCButton = createButton('Run WFC (Pixel Adjacency)'); // Renamed for clarity
+  runWFCButton.parent(container);
+  runWFCButton.mousePressed(processImageAndThenRunWFC); 
+  runWFCButton.hide();
+
+  generateAdjacencyFromPaintButton = createButton('Generate WFC from Painted Example');
+  generateAdjacencyFromPaintButton.parent(container);
+  generateAdjacencyFromPaintButton.mousePressed(generateAdjacencyFromPaintedGrid);
+  generateAdjacencyFromPaintButton.hide();
+
+  clearPaintGridButton = createButton('Clear Painted Grid');
+  clearPaintGridButton.parent(container);
+  clearPaintGridButton.mousePressed(clearPaintedGrid);
+  clearPaintGridButton.hide();
+
+  console.log("UI elements created and positioned.");
+}
+
+function showUIElementsForMode(mode) {
+  // Hide all buttons and containers first
+  previewTilesButton.hide();
+  goToPaintModeButton.hide();
+  runWFCButton.hide();
+  generateAdjacencyFromPaintButton.hide();
+  clearPaintGridButton.hide();
+  tileSizeControlContainer.hide();
+  transformationControlContainer.hide();
+  paletteContainerDiv.hide(); // Hide palette container by default
+
+  // Show relevant elements based on mode
+  if (mode === 'INITIAL_UPLOAD') {
+    // Only file input is visible
+  } else if (mode === 'PREVIEW_TILES') {
+    previewTilesButton.show();
+    goToPaintModeButton.show();
+    runWFCButton.show(); // Pixel adjacency option
+    tileSizeControlContainer.show();
+    transformationControlContainer.show();
+  } else if (mode === 'INTERACTIVE_PAINT') {
+    generateAdjacencyFromPaintButton.show(); // Example-based adjacency option
+    clearPaintGridButton.show();
+    // Keep transformation controls visible for context, but they won't re-extract
+    tileSizeControlContainer.show();
+    transformationControlContainer.show();
+    paletteContainerDiv.show(); // Show the palette in paint mode
+    populatePalette(); // Populate palette when entering paint mode
+  } else if (mode === 'WFC_GENERATING' || mode === 'WFC_COMPLETE') {
+    // After WFC, allow going back to preview/paint or running WFC again
+    previewTilesButton.show();
+    goToPaintModeButton.show();
+    runWFCButton.show(); // Pixel adjacency option
+    tileSizeControlContainer.show();
+    transformationControlContainer.show();
+  }
+}
+
+// --- Screen Drawing Functions ---
+function drawInitialUploadScreen() {
+  background(40);
+  fill(220);
+  textAlign(CENTER, CENTER);
+  text("Upload a tilemap or tileset…", width / 2, height / 2);
+  showUIElementsForMode('INITIAL_UPLOAD');
+  redraw();
+}
+
+function drawWFCGeneratingScreen() {
+  background(40);
+  fill(220);
+  textAlign(CENTER, CENTER);
+  text("Running Wave Function Collapse...", width / 2, height / 2);
+  showUIElementsForMode('WFC_GENERATING');
+  redraw();
+}
+
+function drawInteractivePaintScreen() {
+  background(0); // Clear canvas for painting grid
+  // Palette is now handled by DOM elements, not drawn on canvas
+  // The main grid is drawn here
+  for (let y = 0; y < paintedGridRows; y++) {
+    for (let x = 0; x < paintedGridCols; x++) {
+      const tileId = paintedGrid[y][x];
+      const displayX = x * paintedGridTileSize;
+      const displayY = y * paintedGridTileSize;
+
+      if (tileId !== -1 && tiles[tileId] && tiles[tileId].img) {
+        image(tiles[tileId].img, displayX, displayY, paintedGridTileSize, paintedGridTileSize);
+      } else {
+        stroke(50);
+        fill(20);
+        rect(displayX, displayY, paintedGridTileSize, paintedGridTileSize);
+      }
+    }
+  }
+  redraw(); // Keep redrawing in paint mode
+}
+
+// --- Palette Management (DOM-based) ---
+function populatePalette() {
+  paletteTilesGridDiv.html(''); // Clear existing tiles
+  tiles.forEach((tile, index) => {
+    const tileWrapper = createDiv('');
+    tileWrapper.class('palette-tile-wrapper');
+    tileWrapper.attribute('data-tile-id', index); // Store tile ID
+    tileWrapper.mousePressed(() => selectTileInPalette(index));
+
+    const imgElement = createImg(tile.img.canvas.toDataURL(), `Tile ${index}`); // Convert p5.Image to data URL
+    imgElement.style('width', '100%');
+    imgElement.style('height', '100%');
+    imgElement.style('object-fit', 'contain');
+    tileWrapper.elt.appendChild(imgElement.elt);
+
+    const idLabel = createSpan(index);
+    idLabel.class('palette-tile-id');
+    tileWrapper.elt.appendChild(idLabel.elt);
+
+    paletteTilesGridDiv.elt.appendChild(tileWrapper.elt);
+  });
+  // Select the first tile by default, or none if no tiles
+  selectTileInPalette((tiles.length > 0) ? 0 : -1);
+}
+
+function selectTileInPalette(id) {
+  selectedTileId = id;
+  // Remove selected class from all
+  const allTileWrappers = document.querySelectorAll('.palette-tile-wrapper');
+  allTileWrappers.forEach(wrapper => wrapper.classList.remove('selected'));
+
+  // Add selected class to the chosen tile
+  const selectedWrapper = document.querySelector(`.palette-tile-wrapper[data-tile-id="${id}"]`);
+  if (selectedWrapper) {
+    selectedWrapper.classList.add('selected');
+  }
+
+  // Update selected tile preview
+  if (selectedTileId !== -1 && tiles[selectedTileId] && tiles[selectedTileId].img) {
+    selectedTilePreviewImg.src = tiles[selectedTileId].img.canvas.toDataURL();
+    selectedTilePreviewId.html(`ID: ${selectedTileId}`);
+  } else {
+    selectedTilePreviewImg.src = '';
+    selectedTilePreviewId.html('No tile selected');
+  }
+}
+
+// --- Event Handlers ---
+function handleImageUpload(event) {
+  console.log("handleImageUpload() called.");
+  const file = event.target.files[0];
+  if (file && file.type.startsWith('image/')) {
+    background(40);
+    fill(220);
+    text("Processing tilemap...", width / 2, height / 2);
+    redraw();
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      loadImage(e.target.result, img => {
+        selectedImage = img;
+        processImage(); // Initial processing after image upload
+      }, (loadError) => {
+        console.error("Error loading image:", file.name, loadError);
+        background(40);
+        fill(255, 0, 0);
+        text("Failed to load image. Please try again.", width / 2, height / 2 + 30);
+        redraw();
+      });
     };
-    this.extractPixels(); // Extract pixel data for uniqueness
-  }
-
-  // Extracts all pixel data for the tile for uniqueness comparison
-  extractPixels() {
-    this.img.loadPixels();
-    this.pixels = Array.from(this.img.pixels); // Copy the pixel array
-  }
-
-  // Extracts pixel data for the four edges of the tile
-  // This is used for the Tiled Model's adjacency calculation
-  extractEdgePixels() {
-    this.img.loadPixels(); // Ensure pixels are loaded
-
-    let northEdge = []; // Top row of pixels (left to right)
-    let eastEdge = [];  // Rightmost column of pixels (top to bottom)
-    let southEdge = []; // Bottom row of pixels (left to right)
-    let westEdge = [];  // Leftmost column of pixels (top to bottom)
-
-    for (let i = 0; i < tileSize; i++) {
-      // For images with color, we need to consider all channels (R, G, B, A)
-      // Store RGBA values as an array for each pixel.
-      let pixelIndex;
-
-      // North edge (row 0)
-      pixelIndex = (i * 4);
-      northEdge.push([this.img.pixels[pixelIndex], this.img.pixels[pixelIndex+1], this.img.pixels[pixelIndex+2], this.img.pixels[pixelIndex+3]]);
-
-      // East edge (column tileSize-1)
-      pixelIndex = ((i * tileSize + (tileSize - 1)) * 4);
-      eastEdge.push([this.img.pixels[pixelIndex], this.img.pixels[pixelIndex+1], this.img.pixels[pixelIndex+2], this.img.pixels[pixelIndex+3]]);
-
-      // South edge (row tileSize-1)
-      pixelIndex = ((tileSize - 1) * tileSize + i) * 4;
-      southEdge.push([this.img.pixels[pixelIndex], this.img.pixels[pixelIndex+1], this.img.pixels[pixelIndex+2], this.img.pixels[pixelIndex+3]]);
-
-      // West edge (column 0)
-      pixelIndex = (i * tileSize * 4);
-      westEdge.push([this.img.pixels[pixelIndex], this.img.pixels[pixelIndex+1], this.img.pixels[pixelIndex+2], this.img.pixels[pixelIndex+3]]);
-    }
-    this.edges = [northEdge, eastEdge, southEdge, westEdge];
-  }
-
-
-  // Static method to compare two p5.Image objects based on their pixel data
-  static compareTiles(tileA, tileB) {
-    if (tileA.pixels.length !== tileB.pixels.length) return false;
-    for (let i = 0; i < tileA.pixels.length; i++) {
-      if (tileA.pixels[i] !== tileB.pixels[i]) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  // Static method to compare two edges (arrays of pixel arrays)
-  // This version also checks for reversed matches, common for symmetrical tiles.
-  static compareEdges(edge1, edge2) {
-    if (edge1.length !== edge2.length) return false;
-
-    // Check for direct match
-    let directMatch = true;
-    for (let i = 0; i < edge1.length; i++) {
-      if (edge1[i][0] !== edge2[i][0] ||
-          edge1[i][1] !== edge2[i][1] ||
-          edge1[i][2] !== edge2[i][2] ||
-          edge1[i][3] !== edge2[i][3]) {
-        directMatch = false;
-        break;
-      }
-    }
-    if (directMatch) return true;
-
-    // Check for reversed match (e.g., if a straight pipe can connect to itself reversed)
-    let reversedMatch = true;
-    for (let i = 0; i < edge1.length; i++) {
-      // Compare edge1[i] with edge2 from the opposite end
-      if (edge1[i][0] !== edge2[edge1.length - 1 - i][0] ||
-          edge1[i][1] !== edge2[edge1.length - 1 - i][1] ||
-          edge1[i][2] !== edge2[edge1.length - 1 - i][2] ||
-          edge1[i][3] !== edge2[edge1.length - 1 - i][3]) {
-        reversedMatch = false;
-        break;
-      }
-    }
-    return reversedMatch; // Return true if reversed match, false otherwise
-  }
-}
-
-// --- GRID CELL CLASS ---
-// Represents a single cell in the output map grid
-class GridCell {
-  constructor(x, y, allTileIds) {
-    this.x = x;
-    this.y = y;
-    this.possibilities = [...allTileIds]; // Initially, any tile can go here
-    this.collapsed = false; // Is this cell's tile determined?
-    this.collapsedTile = null; // The actual Tile object once collapsed
-  }
-
-  // Get the current entropy (number of remaining possibilities)
-  get entropy() {
-    return this.possibilities.length;
-  }
-
-  // Draw the cell's current state on the canvas
-  drawSelf() {
-    if (this.collapsed && this.collapsedTile) {
-      // If collapsed, draw the assigned tile image
-      image(this.collapsedTile.img, this.x * tileSize, this.y * tileSize, tileSize, tileSize);
-    } else {
-      // Optional: Draw a subtle indicator for uncollapsed cells (e.g., a grey square)
-      // fill(0, 0, 100, 50); // Semi-transparent grey
-      // rect(this.x * tileSize, this.y * tileSize, tileSize, tileSize);
-    }
-  }
-}
-
-// --- CUSTOM FUNCTIONS ---
-
-// Handles the event when a file is selected using the browse input
-function handleImageUpload() {
-  let file = imageUploadInput.elt.files[0]; // Get the first selected file object
-
-  if (file) {
-    console.log("File selected. Name:", file.name, "Type:", file.type, "Size:", file.size, "bytes.");
-
-    // Check if it's an image type
-    if (file.type && file.type.startsWith('image/')) {
-      console.log("Selected file is an image. Attempting to load using URL.createObjectURL...");
-
-      let imageUrl = URL.createObjectURL(file); // Create a temporary URL
-
-      loadImage(imageUrl,
-        (img) => {
-          // --- SUCCESS CALLBACK START ---
-          console.log("SUCCESS: loadImage callback triggered!");
-          selectedImage = img; // Assign the loaded image to selectedImage
-
-          if (selectedImage && selectedImage.width > 0 && selectedImage.height > 0) {
-            console.log("Image loaded successfully into p5.Image object. Dimensions:", selectedImage.width, "x", selectedImage.height);
-
-            // --- WFC INTEGRATION START ---
-            // Reset allTiles and grid for a new generation
-            allTiles = [];
-            grid = []; // Ensure grid is an empty array before re-initialization
-
-            // Initialize uniqueTilePixelHashes here before use
-            uniqueTilePixelHashes = new Map();
-
-            // --- CHANGE: Call extractTilesFromAtlas for Tiled Model ---
-            extractTilesFromAtlas(selectedImage); // Use the new function
-
-            // Check if any tiles were extracted. If not, WFC won't work.
-            if (allTiles.length === 0) {
-                console.error("No unique tiles could be extracted from the image. Check tileSize or image content.");
-                background(100);
-                resizeCanvas(200, 200);
-                fill(255, 0, 0);
-                text("Error: No unique tiles found in image. Adjust tileSize?", width / 2, height / 2);
-                redraw();
-                URL.revokeObjectURL(imageUrl);
-                return;
-            }
-
-            // --- CHANGE: Call calculateAdjacenciesFromEdges for Tiled Model ---
-            calculateAdjacenciesFromEdges(); // Use the new function
-
-            // --- DEBUG: Log adjacency rules for first few tiles ---
-            console.log("Adjacency rules for first 5 tiles:");
-            for (let i = 0; i < Math.min(5, allTiles.length); i++) {
-                console.log(`Tile ${i}:`, allTiles[i].adjacencies);
-            }
-            // --- END DEBUG ---
-
-            // --- DEBUG: Temporarily display extracted tiles ---
-            // UNCOMMENT THE NEXT TWO LINES TO SEE EXTRACTED TILES AND STOP WFC.
-            // COMMENT THEM OUT AGAIN TO PROCEED WITH WFC.
-            // drawExtractedTilesForDebug();
-            // return; // Stop here if you only want to see extracted tiles for debugging
-            // --- END DEBUG ---
-
-
-            // Re-initialize the WFC grid
-            initializeGrid();
-
-            // --- NEW: Implement WFC Retry Mechanism ---
-            let generationSuccessful = false;
-            const maxGenerationAttempts = 5; // Try to generate the map a few times
-            for (let attempt = 0; attempt < maxGenerationAttempts; attempt++) {
-                console.log(`Attempting WFC generation (Attempt ${attempt + 1}/${maxGenerationAttempts})...`);
-                // Reset grid possibilities for each attempt
-                for (let y = 0; y < gridRows; y++) {
-                    for (let x = 0; x < gridCols; x++) {
-                        grid[y][x].collapsed = false;
-                        grid[y][x].collapsedTile = null;
-                        grid[y][x].possibilities = allTiles.map((tile, index) => index); // Reset to all possibilities
-                    }
-                }
-
-                // Seed the first cell with a random tile for this attempt
-                if (allTiles.length > 0) {
-                    let randomTileId = floor(random(allTiles.length));
-                    let startX = floor(random(gridCols));
-                    let startY = floor(random(gridRows));
-                    collapseCell(grid[startY][startX], randomTileId);
-                    propagate(grid[startY][startX]);
-                }
-
-                // Run the generation
-                generateMap(); // This will try to complete the map
-
-                if (isGridCollapsed()) {
-                    console.log(`WFC generation successful on attempt ${attempt + 1}!`);
-                    generationSuccessful = true;
-                    break; // Exit retry loop
-                } else {
-                    console.warn(`WFC generation failed on attempt ${attempt + 1}. Retrying...`);
-                }
-            }
-
-            if (!generationSuccessful) {
-                console.error(`WFC failed after ${maxGenerationAttempts} attempts. The tile set might be too restrictive or require backtracking.`);
-                background(100);
-                resizeCanvas(gridCols * tileSize, gridRows * tileSize); // Keep the large canvas
-                fill(255, 0, 0);
-                text("WFC Failed: Tile set too restrictive or complex. Try another image or adjust tileSize.", width / 2, height / 2);
-                redraw();
-            }
-            // --- END NEW RETRY MECHANISM ---
-
-
-            // Resize canvas to fit the new WFC output grid
-            resizeCanvas(gridCols * tileSize, gridRows * tileSize);
-            background(0); // Clear canvas for new map
-
-            // Start the WFC generation
-            // generateMap(); // This is now called within the retry loop.
-
-            console.log("WFC process initiated with new image.");
-            // --- WFC INTEGRATION END ---
-
-          } else {
-            console.error("Image loaded but has zero or invalid dimensions. This might indicate a corrupted or unsupported image format.");
-            background(100); // Reset background
-            resizeCanvas(200, 200); // Reset p5 canvas size
-            fill(255, 0, 0); // Red text for error
-            text("Error: Image has invalid dimensions.", width / 2, height / 2);
-            redraw(); // Ensure error message is drawn
-          }
-          URL.revokeObjectURL(imageUrl); // Revoke the object URL
-          // --- SUCCESS CALLBACK END ---
-        },
-        (e) => {
-          // --- ERROR CALLBACK START ---
-          console.error("ERROR: loadImage failed to load uploaded image:", e);
-          background(100); // Reset background
-          resizeCanvas(200, 200); // Reset p5 canvas size
-          fill(255, 0, 0); // Red text for error
-          text("Error loading image. Try another file.", width / 2, height / 2);
-          console.error("Image loading failed. Please try another image or check its integrity.");
-          URL.revokeObjectURL(imageUrl); // Revoke the object URL even on error
-          redraw(); // Ensure error message is drawn
-          // --- ERROR CALLBACK END ---
-        }
-      );
-    } else {
-      background(100); // Reset background
-      resizeCanvas(200, 200); // Reset p5 canvas size
-      fill(255, 165, 0); // Orange text for warning
-      text("Selected file is not an image. Please choose an image file.", width / 2, height / 2);
-      console.log("Selected file is not an image. Please choose an image file.");
-      redraw(); // Ensure warning message is drawn
-    }
+    reader.readAsDataURL(file);
   } else {
-    background(100); // Reset background
-    resizeCanvas(200, 200); // Reset p5 canvas size
-    fill(200);
-    text("No file selected.", width / 2, height / 2);
-    console.log("No file selected.");
-    redraw(); // Ensure message is drawn
+    console.warn("No image file selected or invalid file type.");
+    background(40);
+    fill(255, 165, 0);
+    text("Please upload a single image file (e.g., PNG, JPG).", width / 2, height / 2 + 30);
+    redraw();
   }
 }
 
-// --- NEW FUNCTION FOR TILED MODEL ---
-// Extracts unique tiles from a source atlas image based on tileSize grid
-function extractTilesFromAtlas(sourceAtlasImage) {
-  allTiles = []; // Clear previous tiles
-  uniqueTilePixelHashes.clear(); // Clear the map for a new atlas
-
-  let colsInAtlas = floor(sourceAtlasImage.width / tileSize);
-  let rowsInAtlas = floor(sourceAtlasImage.height / tileSize);
-
-  console.log(`Analyzing atlas (${sourceAtlasImage.width}x${sourceAtlasImage.height}) for ${tileSize}x${tileSize} tiles.`);
-  console.log(`Calculated atlas grid: ${colsInAtlas}x${rowsInAtlas} tiles.`);
-
-  for (let r = 0; r < rowsInAtlas; r++) {
-    for (let c = 0; c < colsInAtlas; c++) {
-      let x = c * tileSize;
-      let y = r * tileSize;
-      let currentSubImage = sourceAtlasImage.get(x, y, tileSize, tileSize);
-      let newTile = new Tile(currentSubImage, allTiles.length);
-
-      // Create a string representation of pixels for hashing/comparison
-      let pixelString = newTile.pixels.join(',');
-
-      if (!uniqueTilePixelHashes.has(pixelString)) {
-        uniqueTilePixelHashes.set(pixelString, newTile.id); // Store pixel string -> tile ID
-        allTiles.push(newTile); // Add as a truly unique tile
-        newTile.extractEdgePixels(); // Extract edges for adjacency calculation
-      }
-    }
-  }
-  console.log(`Found ${allTiles.length} unique tiles from the atlas.`);
+function processImageAndThenDrawPreview() {
+  console.log("processImageAndThenDrawPreview() called.");
+  processImage(true);
 }
 
-// --- NEW FUNCTION FOR TILED MODEL ---
-// Calculates adjacency rules for all extracted tiles by comparing their edges
-function calculateAdjacenciesFromEdges() {
-  // Clear existing adjacencies for all tiles
-  for(let i = 0; i < allTiles.length; i++) {
-    allTiles[i].adjacencies = { north: [], east: [], south: [], west: [] };
-  }
-
-  // Iterate through every unique tile and compare its edges with every other unique tile's edges
-  for (let i = 0; i < allTiles.length; i++) {
-    let tileA = allTiles[i];
-    for (let j = 0; j < allTiles.length; j++) {
-      let tileB = allTiles[j];
-
-      // North of A matches South of B
-      // Compare tileA's North edge (index 0) with tileB's South edge (index 2)
-      if (Tile.compareEdges(tileA.edges[0], tileB.edges[2])) {
-        tileA.adjacencies.north.push(tileB.id);
-      }
-      // East of A matches West of B
-      // Compare tileA's East edge (index 1) with tileB's West edge (index 3)
-      if (Tile.compareEdges(tileA.edges[1], tileB.edges[3])) {
-        tileA.adjacencies.east.push(tileB.id);
-      }
-      // South of A matches North of B
-      // Compare tileA's South edge (index 2) with tileB's North edge (index 0)
-      if (Tile.compareEdges(tileA.edges[2], tileB.edges[0])) {
-        tileA.adjacencies.south.push(tileB.id);
-      }
-      // West of A matches East of B
-      // Compare tileA's West edge (index 3) with tileB's East edge (index 1)
-      if (Tile.compareEdges(tileA.edges[3], tileB.edges[1])) {
-        tileA.adjacencies.west.push(tileB.id);
-      }
-    }
-  }
-  console.log("Comprehensive adjacency rules calculated based on unique tile edges.");
+function processImageAndThenRunWFC() {
+  console.log("processImageAndThenRunWFC() called. Using Pixel Adjacency.");
+  processImage(false, true, 'pixel'); 
 }
 
-
-// --- DEBUG FUNCTION ---
-// Optional debug function to draw all extracted unique tiles
-function drawExtractedTilesForDebug() {
-  // Calculate a reasonable size for the debug display
-  let displayCols = 10; // Number of tiles per row for debug display
-  if (allTiles.length < displayCols) displayCols = allTiles.length;
-  let displayRows = ceil(allTiles.length / displayCols);
-
-  let debugCanvasWidth = displayCols * tileSize;
-  let debugCanvasHeight = displayRows * tileSize;
-
-  resizeCanvas(debugCanvasWidth, debugCanvasHeight);
-  background(50); // Dark background for debug view
-
-  let currentX = 0;
-  let currentY = 0;
-  for (let i = 0; i < allTiles.length; i++) {
-    image(allTiles[i].img, currentX, currentY, tileSize, tileSize);
-    currentX += tileSize;
-    if (currentX >= debugCanvasWidth) {
-      currentX = 0;
-      currentY += tileSize;
-    }
+function processImage(drawPreview = false, runWFC = false, adjacencyMethod = 'pixel') {
+  console.log(`processImage() called with adjacencyMethod: ${adjacencyMethod}`);
+  if (!selectedImage || selectedImage.width === 0 || selectedImage.height === 0) {
+    console.error("No valid image selected or image failed to load.");
+    background(40);
+    fill(255, 0, 0);
+    text("No valid image to process. Please upload an image.", width / 2, height / 2 + 30);
+    return;
   }
-  console.log(`Displaying ${allTiles.length} extracted unique tiles for debugging.`);
-  redraw(); // Force redraw to show these tiles
-}
-// --- END DEBUG FUNCTION ---
 
+  let effectiveTileSize;
+  if (currentTileSizeMode === 'auto') {
+    effectiveTileSize = extractor.detectTileSize(selectedImage);
+    console.log(`Auto-detected tile size: ${effectiveTileSize}px`);
+  } else if (currentTileSizeMode === 'preset' || currentTileSizeMode === 'custom') {
+    effectiveTileSize = tileSize;
+    console.log(`Using selected tile size: ${effectiveTileSize}px`);
+  }
+  
+  tileSize = effectiveTileSize;
 
-// Initializes the grid with GridCell objects, each having all possible tiles
-function initializeGrid() {
-  let allTileIds = allTiles.map((tile, index) => index); // Get an array of all tile IDs [0, 1, 2, ...]
-  // If no tiles were extracted, ensure the grid is empty to prevent errors
-  if (allTileIds.length === 0) {
-      console.warn("Cannot initialize grid: No unique tiles available.");
-      grid = []; // Ensure grid is empty
+  tiles = extractor.sliceToTiles(selectedImage, tileSize, tileSize, allowRotations, allowFlipX, allowFlipY);
+  console.log(`Found ${tiles.length} unique tiles.`);
+
+  if (tiles.length === 0) {
+      console.error("No unique tiles found. Check tile size detection or image content.");
+      background(40);
+      fill(255, 0, 0);
+      text("No unique tiles found. Try a different image or tile size.", width / 2, height / 2 + 30);
       return;
   }
 
-  for (let y = 0; y < gridRows; y++) {
-    grid[y] = [];
-    for (let x = 0; x < gridCols; x++) {
-      grid[y][x] = new GridCell(x, y, allTileIds);
-    }
+  if (adjacencyMethod === 'pixel') {
+    adjacency = extractor.computeAdjacencyTable(tiles);
+    console.log('Adjacency calculated using pixel matching.');
+  } else if (adjacencyMethod === 'example') {
+    // This branch is now explicitly handled by generateAdjacencyFromPaintedGrid
+    console.log('Adjacency will be calculated from painted example.');
   }
-  console.log(`Grid initialized with ${gridCols}x${gridRows} cells.`);
-  // Optionally, pick a starting tile to "seed" the WFC process
-  // For example, collapse the center cell to a random tile to start
-  // let startX = floor(gridCols / 2);
-  // let startY = floor(gridRows / 2);
-  // collapseCell(grid[startY][startX]);
+
+
+  if (drawPreview) {
+    appMode = 'PREVIEW_TILES';
+    drawExtractedTiles();
+  } else if (runWFC) {
+    runWFCProcessInternal();
+  } else {
+    appMode = 'PREVIEW_TILES'; // Default state after initial upload
+    background(40);
+    fill(220);
+    text("Tiles extracted. Click 'Preview' or 'Run WFC'.", width / 2, height / 2);
+    redraw();
+  }
+  showUIElementsForMode(appMode);
 }
 
-// --- WAVE FUNCTION COLLAPSE CORE LOGIC ---
+// --- Interactive Paint Mode Functions ---
+function goToPaintMode() {
+  console.log("Entering Interactive Paint Mode.");
+  appMode = 'INTERACTIVE_PAINT';
+  // Initialize an empty grid for painting if it's the first time or cleared
+  if (paintedGrid.length === 0 || paintedGrid[0].length === 0) {
+     paintedGrid = Array(paintedGridRows).fill(0).map(() => Array(paintedGridCols).fill(-1));
+  }
+  selectedTileId = (tiles.length > 0) ? 0 : -1; // Select the first tile by default
+  // paletteScrollY = 0; // No longer needed for DOM-based scrolling
+  showUIElementsForMode(appMode);
+  redraw(); // Force redraw to show paint screen
+}
 
-// Main function to generate the map using WFC
-function generateMap() {
+function clearPaintedGrid() {
+  console.log("Clearing painted grid.");
+  paintedGrid = Array(paintedGridRows).fill(0).map(() => Array(paintedGridCols).fill(-1));
+  redraw();
+}
+
+function generateAdjacencyFromPaintedGrid() {
+  console.log("Generating adjacency from painted grid...");
+  if (paintedGrid.flat().every(id => id === -1)) {
+    console.warn("Painted grid is empty. Cannot generate adjacency.");
+    background(40);
+    fill(255, 165, 0);
+    text("Painted grid is empty. Please draw a map first!", width / 2, height / 2);
+    redraw();
+    return;
+  }
+  
+  // Use the new extractor function to learn adjacency from the painted grid
+  adjacency = extractor.computeAdjacencyFromExample(paintedGrid, tiles);
+  console.log("Adjacency generated from painted grid example.");
+  
+  // Now run WFC with the newly generated adjacency table
+  runWFCProcessInternal();
+}
+
+// --- Mouse and Wheel Events for Interaction ---
+window.mouseClicked = function() {
+  if (appMode === 'INTERACTIVE_PAINT') {
+    // Only interact with the p5.js canvas area for painting
+    if (mouseX >= 0 && mouseX < paintedGridCols * paintedGridTileSize &&
+        mouseY >= 0 && mouseY < paintedGridRows * paintedGridTileSize) {
+      const gridX = floor(mouseX / paintedGridTileSize);
+      const gridY = floor(mouseY / paintedGridTileSize);
+
+      if (selectedTileId !== -1) {
+        paintedGrid[gridY][gridX] = selectedTileId;
+        console.log(`Placed tile ${selectedTileId} at (${gridX}, ${gridY})`);
+        redraw(); // Redraw canvas to show placed tile
+      }
+    }
+    // Clicks on the palette are handled by DOM event listeners on the palette tiles
+  }
+}
+
+// mouseWheel is no longer needed in sketch.js as the palette is now natively scrollable HTML
+// window.mouseWheel = function(event) { ... }
+
+
+// --- WFC Core Functions (mostly unchanged, moved to internal calls) ---
+function drawExtractedTiles() {
+  console.log("drawExtractedTiles() called.");
+  background(0);
+  const displayTileSize = 32;
+  const previewCols = floor(width / displayTileSize);
+
+  for (let i = 0; i < tiles.length; i++) {
+    const tileImg = tiles[i].img;
+    const x = (i % previewCols) * displayTileSize;
+    const y = floor(i / previewCols) * displayTileSize;
+
+    if (tileImg) {
+      image(tileImg, x, y, displayTileSize, displayTileSize);
+      fill(255, 255, 0);
+      textSize(10);
+      textAlign(LEFT, TOP);
+      text(tiles[i].id, x + 2, y + 2);
+    }
+  }
+  console.log("Extracted tiles drawn for preview.");
+  showUIElementsForMode('PREVIEW_TILES');
+  redraw();
+}
+
+function runWFCProcessInternal() {
+  console.log("runWFCProcessInternal() called. Starting WFC.");
+  appMode = 'WFC_GENERATING';
+  drawWFCGeneratingScreen();
+
+  cols = floor(width / tileSize);
+  rows = floor(height / tileSize);
+
+  initGrid();
+  runWFC();
+  
+  appMode = 'WFC_COMPLETE';
+  showUIElementsForMode(appMode);
+  background(0);
+  drawGrid();
+  fill(220);
+  textSize(16);
+  textAlign(CENTER, BOTTOM);
+  text("Map Generation Complete! Adjust settings and try again.", width / 2, height - 10);
+  redraw();
+}
+
+function initGrid() {
+  console.log("initGrid() called.");
+  grid = [];
+  const ids = tiles.map(t => t.id);
+  for (let y = 0; y < rows; y++) {
+    grid[y] = [];
+    for (let x = 0; x < cols; x++) {
+      grid[y][x] = {
+        x, y,
+        collapsed: false,
+        possibilities: [...ids]
+      };
+    }
+  }
+  const seedX = floor(random(cols));
+  const seedY = floor(random(rows));
+  const seedID = random(ids);
+  collapse(grid[seedY][seedX], seedID);
+  propagate(grid[seedY][seedX]);
+  console.log("Grid initialized and seeded.");
+}
+
+function runWFC() {
+  console.log("runWFC() called.");
+  let limit = cols * rows * 2;
   let iterations = 0;
-  let maxIterations = gridCols * gridRows * 2; // A heuristic to prevent runaway loops
-
-  // Continue as long as there are uncollapsed cells and we haven't hit max iterations
-  while (!isGridCollapsed() && iterations < maxIterations) {
-    let cellToCollapse = findLowestEntropyCell();
-
-    if (cellToCollapse) {
-      // Collapse the chosen cell
-      collapseCell(cellToCollapse);
-      // Propagate the consequences of this collapse to its neighbors
-      propagate(cellToCollapse);
-    } else {
-      // This means either all cells are collapsed, or we're stuck in a contradiction
-      console.log("WFC finished or stuck (no uncollapsed cells with possibilities)! This might be a contradiction or a fully generated map.");
-      break; // Exit loop if finished or stuck
+  while (!isDone() && iterations < limit) {
+    const next = lowestEntropy();
+    if (!next) {
+      console.warn("No uncollapsed cells with possibilities found, stopping WFC.");
+      break;
+    }
+    collapse(next);
+    if (!propagate(next)) {
+      console.error("WFC contradiction detected, stopping.");
+      background(40);
+      fill(255, 0, 0);
+      text("WFC failed to find a solution. Try a different image or restart.", width / 2, height / 2 + 60);
+      redraw();
+      break;
     }
     iterations++;
   }
-
-  console.log("Map generation attempt complete. Total iterations:", iterations);
-  redraw(); // Force a final redraw to show the completed map
+  console.log(`WFC finished in ${iterations} iterations. Grid isDone: ${isDone()}`);
 }
 
-// Checks if all cells in the grid have been collapsed
-function isGridCollapsed() {
-  for (let y = 0; y < gridRows; y++) {
-    for (let x = 0; x < gridCols; x++) {
-      if (!grid[y][x].collapsed) {
-        return false; // Found an uncollapsed cell
-      }
+function isDone() {
+  for (const row of grid) {
+    for (const cell of row) {
+      if (!cell.collapsed) return false;
     }
   }
-  return true; // All cells are collapsed
+  return true;
 }
 
-// Finds the uncollapsed cell with the fewest possibilities (lowest entropy)
-function findLowestEntropyCell() {
-  let minEntropy = Infinity;
-  let cellsWithMinEntropy = [];
-
-  for (let y = 0; y < gridRows; y++) {
-    for (let x = 0; x < gridCols; x++) {
-      let cell = grid[y][x];
-      if (!cell.collapsed) { // Only consider uncollapsed cells
-        // Handle contradiction: if a cell has 0 possibilities, it's a dead end
-        if (cell.entropy === 0) {
-            console.error(`Contradiction detected at ${cell.x},${cell.y}: 0 possibilities left. Generation failed.`);
-            // You might want to restart the process or notify the user
-            return null; // Signal that we are stuck
-        }
-        if (cell.entropy < minEntropy) {
-          minEntropy = cell.entropy;
-          cellsWithMinEntropy = [cell]; // Start a new list if a new minimum is found
-        } else if (cell.entropy === minEntropy) {
-          cellsWithMinEntropy.push(cell); // Add to existing list if entropy is the same
+function lowestEntropy() {
+  let min = Infinity;
+  let choices = [];
+  for (const row of grid) {
+    for (const cell of row) {
+      if (!cell.collapsed && cell.possibilities.length > 0) {
+        if (cell.possibilities.length < min) {
+          min = cell.possibilities.length;
+          choices = [cell];
+        } else if (cell.possibilities.length === min) {
+          choices.push(cell);
         }
       }
     }
   }
-
-  if (cellsWithMinEntropy.length > 0) {
-    // Return a random cell from those with the minimum entropy
-    return random(cellsWithMinEntropy);
-  }
-  return null; // No uncollapsed cells found (grid is collapsed or stuck)
+  return choices.length ? random(choices) : null;
 }
 
-// Collapses a given cell by choosing one of its possibilities
-function collapseCell(cell, chosenTileId = null) { // Added optional chosenTileId parameter
-  if (cell.possibilities.length === 0) {
-    console.error(`Attempted to collapse cell ${cell.x},${cell.y} with no possibilities.`);
-    return;
-  }
-  // If a specific tile ID is provided, use it; otherwise, choose randomly
-  let finalChosenTileId = (chosenTileId !== null && cell.possibilities.includes(chosenTileId)) ? chosenTileId : random(cell.possibilities);
-
-  cell.collapsedTile = allTiles[finalChosenTileId]; // Assign the actual Tile object
-  cell.collapsed = true; // Mark as collapsed
-  cell.possibilities = [finalChosenTileId]; // Its only possibility is now the chosen one
-  // console.log(`Collapsed cell ${cell.x},${cell.y} to tile ID: ${finalChosenTileId}`);
+function collapse(cell, forceID = null) {
+  const choice = forceID !== null ? forceID : random(cell.possibilities);
+  cell.collapsed = true;
+  cell.possibilities = [choice];
+  cell.tile = tiles[choice];
 }
 
-// Propagates the effects of a cell's collapse/reduction to its neighbors
-function propagate(initialCell) {
-  let stack = [initialCell]; // Use a stack to manage cells whose changes need to be propagated
+function propagate(start) {
+  const stack = [start];
+  const dirs = [
+    { dx: 0, dy: -1, d: 'n', o: 's' }, // North
+    { dx: 1, dy:  0, d: 'e', o: 'w' }, // East
+    { dx: 0, dy:  1, d: 's', o: 'n' }, // South
+    { dx: -1, dy: 0, d: 'w', o: 'e' }  // West
+  ];
 
-  while (stack.length > 0) {
-    let currentCell = stack.pop(); // Get the next cell to process
+  while (stack.length) {
+    const cell = stack.pop();
 
-    // Define neighbors relative to the current cell
-    // (dx, dy, direction from current to neighbor, opposite direction from neighbor to current)
-    let neighbors = [
-      { dx: 0, dy: -1, direction: 'north', opposite: 'south' }, // North neighbor
-      { dx: 1, dy: 0, direction: 'east', opposite: 'west' },    // East neighbor
-      { dx: 0, dy: 1, direction: 'south', opposite: 'north' }, // South neighbor
-      { dx: -1, dy: 0, direction: 'west', opposite: 'east' }    // West neighbor
-    ];
+    for (const dir of dirs) {
+      const nx = cell.x + dir.dx;
+      const ny = cell.y + dir.dy;
 
-    for (let neighborDef of neighbors) {
-      let nx = currentCell.x + neighborDef.dx;
-      let ny = currentCell.y + neighborDef.dy;
+      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
 
-      // Check if the neighbor is within grid bounds
-      if (nx >= 0 && nx < gridCols && ny >= 0 && ny < gridRows) {
-        let neighborCell = grid[ny][nx];
+      const neighbor = grid[ny][nx];
 
-        if (!neighborCell.collapsed) { // Only propagate to uncollapsed neighbors
-          let newPossibilities = [];
-          let changed = false;
+      if (neighbor.collapsed) continue;
 
-          // For each possible tile in the neighborCell's current possibilities
-          for (let neighborTileId of neighborCell.possibilities) {
-            let canPlace = false;
-            // Check if ANY of the currentCell's *current* possibilities
-            // can legally connect to this specific `neighborTileId`.
-            for (let currentCellPossibilityId of currentCell.possibilities) {
-                let currentTile = allTiles[currentCellPossibilityId];
-                // Get the list of tiles that can legally connect in the `direction`
-                // IMPORTANT: Ensure the opposite direction is checked for compatibility
-                // e.g., currentTile's NORTH must be compatible with neighborTile's SOUTH
-                let compatibleTiles = currentTile.adjacencies[neighborDef.direction];
+      const newPoss = neighbor.possibilities.filter(nid => {
+        return cell.possibilities.some(cid => {
+          return adjacency[cid][dir.d].includes(nid);
+        });
+      });
 
-                if (compatibleTiles.includes(neighborTileId)) {
-                    canPlace = true; // Yes, this neighborTileId is still possible
-                    break; // Found a valid connection, no need to check other currentCell possibilities
-                }
-            }
+      if (newPoss.length === 0) {
+        return false;
+      }
 
-            if (canPlace) {
-                newPossibilities.push(neighborTileId);
-            } else {
-                changed = true; // This neighborTileId was removed from possibilities
-            }
-          }
-
-          // If the neighbor's possibilities have changed
-          if (changed) {
-            neighborCell.possibilities = newPossibilities; // Update possibilities
-            // console.log(`Cell ${neighborCell.x},${neighborCell.y} possibilities reduced to: ${neighborCell.possibilities.length}`);
-
-            if (neighborCell.possibilities.length === 0) {
-                // Contradiction: Neighbor has no valid tiles left.
-                // This means the current state is impossible.
-                console.error(`Contradiction: Neighbor at ${nx},${ny} has no possibilities left. This path is invalid. Generation might fail.`);
-                // In a full WFC, you'd need to handle this (e.g., backtrack or restart the entire generation).
-                // For this simple version, it might lead to a partially generated map or a stuck state.
-                return; // Stop this propagation path on contradiction
-            }
-            stack.push(neighborCell); // Add the neighbor to the stack to propagate its new state
-          }
-        }
+      if (newPoss.length < neighbor.possibilities.length) {
+        neighbor.possibilities = newPoss;
+        stack.push(neighbor);
       }
     }
   }
+  return true;
 }
 
-// Draws the current state of the grid onto the canvas
 function drawGrid() {
-  background(0); // Clear the canvas with black
-
-  for (let y = 0; y < gridRows; y++) {
-    for (let x = 0; x < gridCols; x++) {
-      grid[y][x].drawSelf(); // Draw each cell
+  console.log("drawGrid() called.");
+  background(0);
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell.collapsed && cell.tile && cell.tile.img) {
+        image(cell.tile.img, cell.x * tileSize, cell.y * tileSize, tileSize, tileSize);
+      }
     }
   }
+  console.log("Grid drawn.");
 }
+
+// Ensure p5.js global functions are attached to window, as this script is a module
+window.mouseClicked = mouseClicked;
+// window.mouseWheel is no longer needed here as the palette is now natively scrollable HTML

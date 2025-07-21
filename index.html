@@ -1,29 +1,98 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Image Browser</title>
-    <!-- Link to your custom stylesheet -->
-    <link rel="stylesheet" type="text/css" href="style.css">
-    <!-- Load the p5.js library (MUST be loaded first) -->
-    <script src="libraries/p5.min.js"></script>
-    <!-- p5.svg.js library removed as requested -->
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tile WFC</title>
+  <link rel="stylesheet" href="./style.css">
+  <style>
+    /* Basic styling for the new palette container */
+    #palette-container {
+      position: absolute;
+      top: 0;
+      right: 0; /* Position on the right side */
+      width: 200px; /* Adjust width as needed */
+      height: 100vh; /* Full viewport height */
+      background-color: rgba(40, 40, 40, 0.9); /* Darker background for palette */
+      padding: 10px;
+      box-sizing: border-box; /* Include padding in width/height */
+      overflow-y: auto; /* Enable vertical scrolling */
+      z-index: 90; /* Below UI controls, above canvas */
+      display: none; /* Hidden by default, shown by JS */
+      flex-direction: column; /* For internal layout */
+      gap: 5px;
+      color: #eee;
+      font-family: sans-serif;
+    }
+
+    #palette-container h3 {
+      margin-top: 0;
+      margin-bottom: 5px;
+      color: #fff;
+    }
+
+    /* Style for individual tiles in the palette */
+    .palette-tile-wrapper {
+      width: 64px; /* Matches paletteTileSize */
+      height: 64px;
+      border: 2px solid transparent;
+      box-sizing: border-box;
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      position: relative;
+    }
+
+    .palette-tile-wrapper.selected {
+      border-color: #FFFF00; /* Yellow highlight */
+    }
+
+    .palette-tile-wrapper img {
+      max-width: 100%;
+      max-height: 100%;
+      display: block;
+    }
+
+    .palette-tile-id {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      color: yellow;
+      font-size: 10px;
+      background-color: rgba(0,0,0,0.5);
+      padding: 1px 3px;
+      border-radius: 3px;
+    }
+
+    /* Flex container for tiles within the palette */
+    #palette-tiles-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px; /* Space between tiles */
+    }
+
+    /* Adjust canvas margin to account for palette */
+    canvas {
+      margin-right: 220px; /* Width of palette + padding */
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Image Browser</h1>
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
+  <script type="module" src="./sketch.js"></script>
 
-        <!-- File input for browsing local images -->
-        <label for="image-upload">Choose an image from your computer:</label>
-        <input type="file" id="image-upload" accept="image/*">
-
-        <div id="p5-canvas-container">
-            <!-- p5.js canvas will be placed here and the image drawn onto it -->
-        </div>
+  <!-- New container for the tile palette -->
+  <div id="palette-container">
+    <h3>Tile Palette:</h3>
+    <div id="palette-tiles-grid">
+      <!-- Tiles will be dynamically added here by JavaScript -->
     </div>
-
-    <!-- Your p5.js sketch code -->
-    <script src="sketch.js"></script>
+    <div id="selected-tile-preview" style="text-align: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid #555;">
+      <h4>Selected Tile:</h4>
+      <img id="preview-img" style="width: 100px; height: 100px; border: 1px solid #777; object-fit: contain; background-color: #333;">
+      <p id="preview-id" style="margin: 5px 0; font-size: 14px;"></p>
+    </div>
+  </div>
 </body>
 </html>
